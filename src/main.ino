@@ -1,8 +1,3 @@
-/*
-  It's finally here!
-  Edit by f0x, original code from Fastled, Sebastius, Juerd
-*/
-
 #include <EEPROM.h>
 
 #include <ESP8266WiFi.h>
@@ -15,6 +10,7 @@
 #include <PubSubClient.h> //https://github.com/knolleary/pubsubclient/releases/tag/2.4
 
 #include "FastLED.h"
+ADC_MODE(ADC_VCC);
 FASTLED_USING_NAMESPACE
 
 #if defined(FASTLED_VERSION) && (FASTLED_VERSION < 3001000)
@@ -24,19 +20,14 @@ FASTLED_USING_NAMESPACE
 void onMqttMessage(char* topic, byte * payload, unsigned int length);
 boolean reconnect();
 void mqtt_publish (String topic, String message);
-void rainbow();
-void juggle();
-void confetti();
-void nextPattern();
 
 #define DATA_PIN    5
 #define CLK_PIN     6
 #define LED_TYPE    APA102
 #define COLOR_ORDER BGR
-#define NUM_LEDS    11
+#define NUM_LEDS    23
 CRGB leds[NUM_LEDS];
 
-#define BRIGHTNESS        255
 #define FRAMES_PER_SECOND 1000
 #define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))
 
@@ -46,7 +37,20 @@ bool switchstate;
 bool zapgevaar = LOW;
 bool iemand_kijkt = LOW;
 static uint8_t hue = 0;
+int prev_x = 0;
 int x = 0;
+int x_p1 = 0;
+int x_p2 = 0;
+int brightness = 0;
+int bright_dir = 1;
+int dir = 1;
+
+void fastPastelRainbow();
+void ring();
+void wave();
+
+typedef void (*PatternList[])();
+PatternList gPatterns = { fastPastelRainbow, wave , ring};
 
 // WiFi settings
 char ssid[] = "revspace-pub-2.4ghz"; // your network SSID (name)
@@ -60,10 +64,13 @@ PubSubClient client(mqtt_server, 1883, onMqttMessage, espClient);
 long lastReconnectAttempt = 0;
 
 uint8_t gHue = 0; // rotating "base color" used by many of the patterns
+uint8_t currentPattern = 0;
+int pos = 0;
+int order[] = {0, 0, 11, 12, 1, 22, 10, 13, 2, 21, 9, 14, 3, 20, 8, 15, 4, 19, 7, 16, 5, 18, 6, 17};
 
 boolean reconnect() {
-    if (client.connect("SAMLA")) {
-        client.publish("f0x/samla", "hello world");
+    if (client.connect("tower")) {
+        client.publish("f0x/tower/online", "hello world");
         client.subscribe("revspace/cams");
         client.loop();
         client.subscribe("revspace/button/nomz");
@@ -74,6 +81,16 @@ boolean reconnect() {
     return client.connected();
 }
 
+void setRing(int pos, CHSV color) {
+  leds[order[pos]] =   color;
+  leds[order[pos+1]] = color;
+  leds[order[pos+2]] = color;
+  leds[order[pos+3]] = color;
+}
+
+void nextPattern() {
+  currentPattern = (currentPattern + 1) % ARRAY_SIZE( gPatterns);
+}
 
 void onMqttMessage(char* topic, byte * payload, unsigned int length) {
     uint16_t spaceCnt;
@@ -110,20 +127,26 @@ void onMqttMessage(char* topic, byte * payload, unsigned int length) {
 
     if (strcmp(topic, "revspace/button/nomz") == 0) {
         Serial.println("NOMZ!");
-        for (uint8_t tel = 0; tel < 150; tel++) {
-            for (uint8_t vuller = 0; vuller < NUM_LEDS; vuller++) {
-                leds[vuller] = CRGB::Orange;
-            }
+        leds[x_p1] = CHSV(0, 0, 0);
+        leds[x] = CHSV(0, 0, 0);
+        int start = millis();
+        while(millis() - start < 30000) {
+          for (int i=0; i<8; i++) {
+            FastLED.showColor(CRGB::Orange);
+            delay(20);
+            FastLED.showColor(CHSV(0, 0, 0));
+            delay(50);
             FastLED.show();
-            delay(150);
-
-            for (uint8_t vuller = 0; vuller < NUM_LEDS; vuller++) {
-                leds[vuller] = CRGB::Blue;
-            }
+          }
+          for (int i=0; i<8; i++) {
+            FastLED.showColor(CHSV(170, 255, 255));
+            delay(20);
+            FastLED.showColor(CHSV(0, 0, 0));
+            delay(50);
             FastLED.show();
-            delay(100);
+          }
+          delay(600);
         }
-
     }
 
     // DOORBELL
@@ -137,7 +160,7 @@ void onMqttMessage(char* topic, byte * payload, unsigned int length) {
             delay(1000);
 
             for (uint8_t vuller = 0; vuller < NUM_LEDS; vuller++) {
-                leds[vuller] = CRGB::Black;
+                leds[vuller] = CHSV(0, 0, 0);
             }
             FastLED.show();
             delay(1000);
@@ -176,17 +199,21 @@ void setup() {
     WiFi.begin(ssid, pass);
 
     int i = 0;
+    int prev_i = 0;
     while (WiFi.status() != WL_CONNECTED) {
         delay(50);
-        leds[i] = CRGB::Red;
-        leds[(i+NUM_LEDS-1)%NUM_LEDS] = CRGB::Black;
+        setRing(i, CHSV(0, 255, 255));
+        setRing(prev_i, CHSV(0, 0, 0));
         FastLED.show();
-        i = (i+1)%NUM_LEDS;
+        prev_i = i;
+        i = i + 4;
         Serial.print(".");
+        if (i > NUM_LEDS) {
+          i = 0;
+        }
     }
-    for (int i=0; i<NUM_LEDS; i++) {
-      leds[i] = CRGB::Black;
-    }
+
+    FastLED.showColor(CRGB::Black);
     FastLED.show();
     Serial.println("");
 
@@ -207,7 +234,7 @@ void setup() {
 
         // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
         Serial.println("Start updating " + type);
-        FastLED.showColor(CRGB::Black);
+        FastLED.showColor(CHSV(0, 0, 0));
     });
 
     ArduinoOTA.onEnd([]() {
@@ -217,10 +244,15 @@ void setup() {
 
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
         Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-        leds[x] = CRGB::Blue;
-        leds[(x+NUM_LEDS-1)%NUM_LEDS] = CRGB::Black;
+        setRing(x, CHSV(170, 255, 255));
+        setRing(prev_x, CHSV(0, 0, 0));
         FastLED.show();
-        x = (x+1)%NUM_LEDS;
+        prev_x = x;
+        x = x + 4;
+        Serial.print(".");
+        if (x > NUM_LEDS) {
+          x = 0;
+        }
     });
 
     ArduinoOTA.onError([](ota_error_t error) {
@@ -235,37 +267,94 @@ void setup() {
     ArduinoOTA.begin();
 }
 
+void fastPastelRainbow() {
+  setRing(pos, CHSV(hue, 255, 255));
+
+  EVERY_N_MILLISECONDS(50) {
+    pos = pos + 4;
+  }
+
+  FastLED.show();
+  hue++;
+
+  if (pos > 23) {
+    pos = 0;
+  }
+
+  if (hue>255) {
+    hue=0;
+  }
+}
+
+void wave() {
+  EVERY_N_MILLISECONDS(10) {
+    brightness = brightness + bright_dir;
+    if (brightness > 254 or brightness < 1) {
+      if (dir == -1) {
+        bright_dir = 1;
+      } else {
+        bright_dir = -1;
+      }
+      brightness = (brightness + bright_dir*2);
+    }
+  }
+
+  ring();
+}
+
+void ring() {
+  FastLED.show();
+
+  setRing(x_p1, CHSV(0, 0, 0));
+  setRing(x, CHSV(hue, 255, brightness));
+
+  EVERY_N_MILLISECONDS(100) {
+    hue++;
+    x_p1 = x;
+
+    x = (x + 4*dir);
+
+    if (x > NUM_LEDS or x < 0) {
+      if (dir == -1) {
+        dir = 1;
+      } else {
+        dir = -1;
+      }
+      x = (x + (dir*2)*4);
+    }
+  }
+
+  if (hue>255) {
+    hue=0;
+  }
+}
 
 void loop() {
-    if (!client.connected()) {
-        long verstreken = millis();
-        if (verstreken - lastReconnectAttempt > 5000) {
-            lastReconnectAttempt = verstreken;
-            // Attempt to reconnect
-            if (reconnect()) {
-                lastReconnectAttempt = 0;
-            }
-        }
-    } else {
-        // Client connected
-        client.loop();
+  if (!client.connected()) {
+    long verstreken = millis();
+    if (verstreken - lastReconnectAttempt > 5000) {
+      lastReconnectAttempt = verstreken;
+      // Attempt to reconnect
+      if (reconnect()) {
+        lastReconnectAttempt = 0;
+      }
     }
-    
-    ArduinoOTA.handle();
-    //fill_rainbow( leds, NUM_LEDS, gHue, 7);
+  } else {
+    // Client connected
+    client.loop();
+  }
+  
+  ArduinoOTA.handle();
+  //fill_rainbow( leds, NUM_LEDS, gHue, 7);
 
-    if (iemand_kijkt) {
-      FastLED.showColor(CRGB::Red);
-    } else {
-      FastLED.showColor(CHSV(hue, 255, 200)); 
-    }
+  if (iemand_kijkt) {
+    FastLED.showColor(CRGB::Red);
+  }
 
-    FastLED.show();
-    EVERY_N_MILLISECONDS( 100 ) {
-        hue++;    // slowly cycle the "base color" through the rainbow
-    }
-    if (hue>255) {
-      hue=0;
-    }
+  gPatterns[currentPattern]();
+
+  EVERY_N_SECONDS(30) {
+    nextPattern();
+  }
 }
 
